@@ -1,0 +1,17 @@
+# build outputs
+*.sys
+*.cat
+*.cer
+*.pfx
+*.pdb
+*.obj
+*.lib
+*.exp
+*.log
+bin/
+obj/
+x64/
+ARM64/
+.vs/
+# panel firmware is not redistributed
+ft3680_fw.bin

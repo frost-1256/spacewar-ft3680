@@ -1,0 +1,73 @@
+; FT3680Touch.inf — FocalTech FT3680 SPI touchscreen (spacewar)
+; KMDF function driver + mshidkmdf upper filter, mirroring the structure of
+; the WOA-Drivers FocalTechTouch (FT8706/I2C) INF. Binds ACPI\FTSX3680,
+; the child node added under \_SB.SP14 by DSDT v7-touch.
+
+[Version]
+Signature           = "$Windows NT$"
+Class               = HIDClass
+ClassGuid           = {745A17A0-74D3-11D0-B6FE-00A0C90F57DA}
+Provider            = %Provider_Name%
+DriverVer           = 10/27/2026,1.0.0.0
+CatalogFile         = FT3680Touch.cat
+PnpLockdown         = 1
+
+[DestinationDirs]
+DefaultDestDir      = 12
+
+[Manufacturer]
+%Manufacturer_Name%  = Standard, NTARM64
+
+[Standard.NTARM64]
+%TchDriver_Device_Desc% = TchDriver_Device, ACPI\FTSX3680
+
+; ==================== Device install ====================
+[TchDriver_Device.NT]
+CopyFiles           = Drivers_Dir
+
+[Drivers_Dir]
+FT3680Touch.sys
+
+[TchDriver_Device.NT.HW]
+AddReg              = TchDriver_Device_AddReg
+
+[TchDriver_Device_AddReg]
+HKR,,"UpperFilters",%REG_MULTI_SZ%,"mshidkmdf"
+
+[TchDriver_Device.NT.Services]
+AddService          = FT3680Touch,%SPSVCINST_ASSOCSERVICE%,TchDriver_Service_Inst
+
+[TchDriver_Service_Inst]
+DisplayName         = %TchDriver_Service_Desc%
+ServiceType         = %SERVICE_KERNEL_DRIVER%
+StartType           = %SERVICE_DEMAND_START%
+ErrorControl        = %SERVICE_ERROR_NORMAL%
+ServiceBinary       = %12%\FT3680Touch.sys
+LoadOrderGroup      = Base
+
+; ==================== WDF ====================
+[TchDriver_Device.NT.Wdf]
+KmdfService         = FT3680Touch, TchDriver_wdfsect
+
+[TchDriver_wdfsect]
+KmdfLibraryVersion  = 1.15
+
+[SourceDisksNames]
+1 = %Installation_Disk%,,,
+
+[SourceDisksFiles]
+FT3680Touch.sys = 1,,
+
+; ==================== Strings ====================
+[Strings]
+Provider_Name           = "spacewar WoA (frost-1256)"
+Manufacturer_Name       = "FocalTech"
+Installation_Disk       = "FocalTech FT3680 Digitizer Installation Disk"
+TchDriver_Device_Desc   = "FocalTech FT3680 Touchscreen (SPI)"
+TchDriver_Service_Desc  = "FocalTech FT3680 Touchscreen Driver"
+
+SPSVCINST_ASSOCSERVICE  = 0x00000002
+SERVICE_KERNEL_DRIVER   = 1
+SERVICE_DEMAND_START    = 3
+SERVICE_ERROR_NORMAL    = 1
+REG_MULTI_SZ            = 0x00010000
