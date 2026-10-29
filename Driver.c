@@ -79,8 +79,10 @@ FtEvtDeviceAdd(_In_ WDFDRIVER Driver, _Inout_ PWDFDEVICE_INIT DeviceInit)
     WdfDeviceInitSetIoInCallerContextCallback(DeviceInit,
                                               FtEvtIoInCallerContext);
 
-    /* mshidkmdf expects the function driver to be the power-policy owner. */
-    WdfDeviceInitSetPowerPolicyOwnership(DeviceInit, TRUE);
+    /* HIDCLASS/mshidkmdf is the power-policy owner of the HID stack.
+       Relinquish ownership: claiming it duplicates the PPO and KMDF
+       bugchecks 0x10D/0xD on the first D0->Dx SetPower (Restart). */
+    WdfDeviceInitSetPowerPolicyOwnership(DeviceInit, FALSE);
 
     WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&deviceAttributes, DEVICE_CONTEXT);
     status = WdfDeviceCreate(&DeviceInit, &deviceAttributes, &device);
