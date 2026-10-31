@@ -30,11 +30,18 @@ Highlights:
 - **Ghost-contact filter**: with the ADSP subsystem running, the panel emits
   stuck records with raw pressure = 0 and raw area = 0; a record is dropped
   only after 4 consecutive all-zero frames for the same contact ID.
+- **Rescan-proof (auto pin restore)**: a PnP rescan (`pnputil /scan-devices`,
+  Device Manager rescan) re-muxes the bit-bang SPI pins GPIO52-55 and
+  silently kills communication with the chip. Before every bus transaction
+  the driver checks the four pin CTLs (`PinPolicy.h`); if they match the one
+  observed poisoned pattern, it restores them in place (rate-limited to
+  8 attempts per 10 s, logged to `C:\ft3680.log`). Healthy pins are only
+  read, and unknown configurations are never written.
 - **Power is not the driver's job**: the touch rails (pm8350c ldo3 2.8 V /
-  ldo8 1.8 V) are voted on by the UEFI before Windows starts. Known platform
-  issue: drivers whose start makes PEP recompute RPMh state can drop those
-  rails mid-session (the firmware, being volatile, does not recover). See the
-  Mu-Silicium fork's Status/issues for the current state of that problem.
+  ldo8 1.8 V) are voted on by the UEFI before Windows starts. Some subsystem
+  starts (e.g. Qualcomm Subsystem Manager) still kill touch mid-session for
+  reasons unrelated to the pin re-mux above. See the Mu-Silicium fork's
+  Status/issues for the current state of that problem.
 
 ## Requirements
 

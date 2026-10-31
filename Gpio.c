@@ -5,6 +5,7 @@
     then addressed by their _CRS pin number (reset = GPIO105).
 --*/
 #include "Ft3680.h"
+#include "PinPolicy.h"
 
 NTSTATUS
 GpioOpenTarget(_In_ WDFDEVICE Device, _In_ PDEVICE_CONTEXT Ctx,
@@ -109,6 +110,98 @@ GpioWritePin(_In_ PDEVICE_CONTEXT Ctx, _In_ ULONG Pin, _In_ BOOLEAN Value)
 /* ------------------------------------------------------------------ */
 
 #define BB_HALF_US  3
+
+/* ------------------------------------------------------------------ */
+/* Auto-restore of the bit-bang comm pins (GPIO52-55).                 */
+/*                                                                     */
+/* A PnP rescan (pnputil /scan-devices, Device Manager rescan) has     */
+/* been observed to re-mux GPIO52-55 away from their configured CTL    */
+/* values (mux change, OE cleared on 53-55), silently killing SPI      */
+/* communication with the touch chip until reboot. The restore below   */
+/* runs at the head of every bus transaction (BusMutex held by the     */
+/* SpbExecute dispatch): if the four CTLs still match the healthy      */
+/* values it is read-only; if they match the one observed poisoned     */
+/* pattern it rewrites only the affected CTL fields back; anything     */
+/* else is left untouched. No reset, power or INT pin is ever written. */
+/* ------------------------------------------------------------------ */
+
+/* Caller holds BusMutex (via the SpbExecute dispatch). Restore the
+ * known role mapping only; no reset/INT/power writes. */
+static NTSTATUS FtRestoreCommPinsLocked(PDEVICE_CONTEXT Ctx)
+{
+    const ULONG pins[4] = {52,53,54,55};
+    const ULONG wanted[4] = {1,0x200,0x201,0x201};
+    ULONG before[4];
+    ULONG i;
+    NTSTATUS status = STATUS_SUCCESS;
+    if (!Ctx->UseBb || !Ctx->TlmmBase || Ctx->HardwareStopping ||
+        Ctx->BbPins[BB_MOSI]!=53 || Ctx->BbPins[BB_MISO]!=52 ||
+        Ctx->BbPins[BB_CLK]!=54 || Ctx->BbPins[BB_CS]!=55) return STATUS_INVALID_DEVICE_STATE;
+    for(i=0;i<4;++i) {
+        before[i]=READ_REGISTER_ULONG(TlmmPinRegs(Ctx,pins[i]));
+        if ((before[i]&0x23f)!=wanted[i] && (before[i]&0x23f)!=5 &&
+            (i==0 || (before[i]&0x23f)!=0x205)) {
+            status=STATUS_INVALID_DEVICE_STATE;
+        }
+        FtLog(Ctx,"auto: GPIO%lu before CTL=%08X",pins[i],before[i]);
+    }
+    if (NT_SUCCESS(status)) {
+        /* Preload output latches before switching function. CS first. */
+        WRITE_REGISTER_ULONG(TlmmPinRegs(Ctx,55)+1,2);
+        WRITE_REGISTER_ULONG(TlmmPinRegs(Ctx,53)+1,0);
+        WRITE_REGISTER_ULONG(TlmmPinRegs(Ctx,54)+1,0);
+        WRITE_REGISTER_ULONG(TlmmPinRegs(Ctx,55),(before[3]&~0x23fu)|wanted[3]);
+        WRITE_REGISTER_ULONG(TlmmPinRegs(Ctx,52),(before[0]&~0x23fu)|wanted[0]);
+        WRITE_REGISTER_ULONG(TlmmPinRegs(Ctx,53),(before[1]&~0x23fu)|wanted[1]);
+        WRITE_REGISTER_ULONG(TlmmPinRegs(Ctx,54),(before[2]&~0x23fu)|wanted[2]);
+        Ctx->BbPinsConfigured=TRUE;
+        for(i=0;i<4;++i) {
+            ULONG after=READ_REGISTER_ULONG(TlmmPinRegs(Ctx,pins[i]));
+            FtLog(Ctx,"auto: GPIO%lu after CTL=%08X",pins[i],after);
+            if ((after&0x23f)!=wanted[i]) status=STATUS_IO_DEVICE_ERROR;
+        }
+    }
+    return status;
+}
+
+/* Called only at transaction boundaries, with BusMutex already held. */
+static NTSTATUS FtAutoRestorePins(PDEVICE_CONTEXT Ctx)
+{
+    ULONG ctl[4];
+    ULONG i;
+    int action;
+    ULONGLONG now;
+    NTSTATUS status;
+    if (!Ctx->BroughtUpOnce || !Ctx->BbPinsConfigured) return STATUS_SUCCESS;
+    if (Ctx->BbPins[BB_MOSI]!=53 || Ctx->BbPins[BB_MISO]!=52 ||
+        Ctx->BbPins[BB_CLK]!=54 || Ctx->BbPins[BB_CS]!=55) return STATUS_INVALID_DEVICE_STATE;
+    for(i=0;i<4;++i) ctl[i]=READ_REGISTER_ULONG(TlmmPinRegs(Ctx,52+i));
+    action=FtClassifyPins(ctl);
+    if(action==FT_PINS_HEALTHY) return STATUS_SUCCESS;
+    if(action==FT_PINS_UNKNOWN) {
+        if(!Ctx->AutoUnknownLogged) {
+            FtLog(Ctx,"auto: REFUSED unknown CTL %08X %08X %08X %08X",ctl[0],ctl[1],ctl[2],ctl[3]);
+            Ctx->AutoUnknownLogged=TRUE;
+        }
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    }
+    now=KeQueryInterruptTime();
+    if(now-Ctx->AutoWindowStart>=100000000ull) {
+        Ctx->AutoWindowStart=now; Ctx->AutoWindowCount=0; Ctx->AutoLimitLogged=FALSE;
+    }
+    if(Ctx->AutoWindowCount>=8) {
+        if(!Ctx->AutoLimitLogged) {FtLog(Ctx,"auto: repair rate limit, 8 attempts/10s"); Ctx->AutoLimitLogged=TRUE;}
+        return STATUS_DEVICE_BUSY;
+    }
+    ++Ctx->AutoWindowCount;
+    ++Ctx->AutoAttempts;
+    FtLog(Ctx,"auto: attempt %lu known pin change %08X %08X %08X %08X",Ctx->AutoAttempts,ctl[0],ctl[1],ctl[2],ctl[3]);
+    status=FtRestoreCommPinsLocked(Ctx);
+    if(NT_SUCCESS(status)) ++Ctx->AutoRepairs;
+    FtLog(Ctx,"auto: attempt %lu status=%08X repairs=%lu NO RESET",Ctx->AutoAttempts,status,Ctx->AutoRepairs);
+    return status;
+}
+
 #define BB_CS_GAP_US 150
 
 NTSTATUS
@@ -200,6 +293,14 @@ BbExecute(_In_ PDEVICE_CONTEXT Ctx, _In_ ULONG EntryCount,
               (ULONG)TlmmRead(Ctx, Ctx->BbPins[BB_MISO]),
               (ULONG)TlmmRead(Ctx, Ctx->BbPins[BB_CLK]),
               (ULONG)TlmmRead(Ctx, Ctx->BbPins[BB_CS]));
+    }
+
+    /* Repair a known external re-mux of the comm pins (see
+       FtAutoRestorePins above) before starting the transaction.
+       BbExecute runs inside the existing BusMutex; do not re-lock it. */
+    {
+        NTSTATUS pinStatus = FtAutoRestorePins(Ctx);
+        if (!NT_SUCCESS(pinStatus)) return pinStatus;
     }
 
     TlmmWrite(Ctx, BbPinNo(BB_CS), FALSE);   /* assert (low) */

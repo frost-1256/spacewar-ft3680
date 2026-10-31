@@ -118,6 +118,14 @@ typedef struct _DEVICE_CONTEXT {
     KMUTEX BusMutex;
     ULONG  FrameLogCount;
 
+    /* Auto pin-restore: rate-limit window + counters (Gpio.c) */
+    ULONGLONG AutoWindowStart;
+    ULONG  AutoWindowCount;
+    ULONG  AutoAttempts;
+    ULONG  AutoRepairs;
+    BOOLEAN AutoUnknownLogged;
+    BOOLEAN AutoLimitLogged;
+
     /* Last built HID input report (ReportId excluded; stored from byte 1) */
     UCHAR   LastReport[FT_HID_REPORT_LEN];
     BOOLEAN LastReportValid;

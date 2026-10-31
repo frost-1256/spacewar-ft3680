@@ -72,6 +72,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="Ft3680.h" />
+    <ClInclude Include="PinPolicy.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Driver.c" />
