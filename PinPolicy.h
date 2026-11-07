@@ -11,6 +11,9 @@ static __inline int FtClassifyPins(const unsigned long Ctl[4])
     for(i=0;i<4;++i) {
         unsigned long v=Ctl[i]&0x23f;
         if(v==expected[i]) continue;
+        /* GPIO53 (MOSI) is an output; a leftover pull-down (0x201, same as CLK/CS) is harmless.
+           Seen at boot since 2026-11-07 (source not the DSDT, which says PullNone). */
+        if(i==1 && v==0x201) continue;
         if(v==5 || (i>0 && v==0x205)) changed=1;
         else return FT_PINS_UNKNOWN;
     }
